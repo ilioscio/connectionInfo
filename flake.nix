@@ -64,6 +64,40 @@
               defaultText = lib.literalExpression "pkgs.connectionInfo";
               description = "The connectionInfo package to use";
             };
+
+            basePath = lib.mkOption {
+              type = lib.types.str;
+              default = "/connectionInfo";
+              description = "Base URL path for the service (e.g., /connectionInfo). Empty means serve at the root of the virtual host.";
+              example = "/connectionInfo";
+            };
+
+            nginx = {
+              enable = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = "Whether to enable the built-in nginx reverse proxy configuration. Enabled by default so the service is self-contained.";
+              };
+
+              virtualHost = lib.mkOption {
+                type = lib.types.str;
+                default = "localhost";
+                description = "nginx virtual host name under which to serve connectionInfo.";
+                example = "website.com";
+              };
+
+              forceSSL = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = "Force SSL for the virtual host.";
+              };
+
+              enableACME = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = "Enable ACME (Let's Encrypt) for the virtual host.";
+              };
+            };
           };
 
           config = lib.mkIf cfg.enable {
@@ -102,6 +136,40 @@
             };
 
             networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
+
+            services.nginx = lib.mkIf cfg.nginx.enable (lib.mkMerge [
+              {
+                enable = true;
+                recommendedProxySettings = true;
+              }
+
+              # When basePath is empty: dedicated virtual host mode
+              (lib.mkIf (cfg.basePath == "") {
+                virtualHosts.${cfg.nginx.virtualHost} = {
+                  forceSSL = cfg.nginx.forceSSL;
+                  enableACME = cfg.nginx.enableACME;
+                  locations."/" = {
+                    proxyPass = "http://127.0.0.1:${toString cfg.port}";
+                  };
+                };
+              })
+
+              # When basePath is set: sub-path mode on existing virtual host
+              (lib.mkIf (cfg.basePath != "") {
+                virtualHosts.${cfg.nginx.virtualHost} = {
+                  forceSSL = cfg.nginx.forceSSL;
+                  enableACME = cfg.nginx.enableACME;
+                  # Redirect bare path to path with trailing slash
+                  locations."= ${cfg.basePath}" = {
+                    return = "301 ${cfg.basePath}/";
+                  };
+                  # Proxy with prefix stripping (trailing slash on proxy_pass)
+                  locations."${cfg.basePath}/" = {
+                    proxyPass = "http://127.0.0.1:${toString cfg.port}/";
+                  };
+                };
+              })
+            ]);
           };
         };
 
